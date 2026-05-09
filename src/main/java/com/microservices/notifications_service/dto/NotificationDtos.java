@@ -1,4 +1,4 @@
-package com.microservices.notification.dto;
+package com.microservices.notifications_service.dto;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.AllArgsConstructor;

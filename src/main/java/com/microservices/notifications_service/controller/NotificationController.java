@@ -1,4 +1,4 @@
-package com.microservices.notification.controller;
+package com.microservices.notifications_service.controller;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -18,7 +18,7 @@ import java.util.Map;
 @RequestMapping("/notifications")
 @RequiredArgsConstructor
 @Tag(name = "Notifications", description = "Real-time customer notifications via WebSocket STOMP. " +
-        "Connect to /ws-notification and subscribe to /topic/customer/{customerId} to receive order updates.")
+        "Connect to /ws-notifications and subscribe to /topic/customer/{customerId} to receive order updates.")
 public class NotificationController {
 
     private final SimpMessagingTemplate messagingTemplate;
@@ -29,7 +29,7 @@ public class NotificationController {
     @ApiResponse(responseCode = "200", description = "WebSocket info returned")
     public ResponseEntity<Map<String, String>> wsInfo() {
         return ResponseEntity.ok(Map.of(
-                "endpoint",      "/ws-notification",
+                "endpoint",      "/ws-notifications",
                 "customerTopic", "/topic/customer/{customerId}",
                 "protocol",      "STOMP over SockJS"
         ));

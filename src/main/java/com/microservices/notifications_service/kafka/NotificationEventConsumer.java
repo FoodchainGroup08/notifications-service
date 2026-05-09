@@ -1,7 +1,7 @@
-package com.microservices.notification.kafka;
+package com.microservices.notifications_service.kafka;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.microservices.notification.dto.NotificationDtos;
+import com.microservices.notifications_service.dto.NotificationDtos;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
@@ -18,7 +18,7 @@ public class NotificationEventConsumer {
     private final SimpMessagingTemplate messagingTemplate;
     private final ObjectMapper objectMapper;
 
-    @KafkaListener(topics = "order.received", groupId = "notification-service-group")
+    @KafkaListener(topics = "order.received", groupId = "notifications-service-group")
     public void handleOrderReceived(String message) {
         try {
             NotificationDtos.OrderReceivedEvent event =
@@ -41,7 +41,7 @@ public class NotificationEventConsumer {
         }
     }
 
-    @KafkaListener(topics = "order.status.updated", groupId = "notification-service-group")
+    @KafkaListener(topics = "order.status.updated", groupId = "notifications-service-group")
     public void handleOrderStatusUpdated(String message) {
         try {
             NotificationDtos.OrderStatusUpdatedEvent event =
@@ -65,7 +65,7 @@ public class NotificationEventConsumer {
         }
     }
 
-    @KafkaListener(topics = "order.ready", groupId = "notification-service-group")
+    @KafkaListener(topics = "order.ready", groupId = "notifications-service-group")
     public void handleOrderReady(String message) {
         try {
             NotificationDtos.OrderReadyEvent event =

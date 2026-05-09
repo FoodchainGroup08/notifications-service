@@ -1,4 +1,4 @@
-package com.microservices.notification.config;
+package com.microservices.notifications_service.config;
 
 import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.OpenAPI;
