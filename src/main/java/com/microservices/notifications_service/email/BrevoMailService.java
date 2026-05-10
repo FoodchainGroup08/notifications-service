@@ -6,6 +6,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -59,13 +60,20 @@ public class BrevoMailService {
         body.put("subject", event.getSubject() != null ? event.getSubject() : "FoodChain");
         body.put("htmlContent", event.getHtmlContent());
 
-        restClient.post()
-                .uri(BREVO_SMTP_URL)
-                .header("api-key", apiKey)
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(body)
-                .retrieve()
-                .toBodilessEntity();
-        log.info("Brevo email sent type={} to={}", event.getEmailType(), event.getToEmail());
+        try {
+            restClient.post()
+                    .uri(BREVO_SMTP_URL)
+                    .header("api-key", apiKey)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .toBodilessEntity();
+            log.info("Brevo email sent type={} to={}", event.getEmailType(), event.getToEmail());
+        } catch (RestClientResponseException e) {
+            log.error("Brevo API rejected email type={} to={} — status={} body={}",
+                    event.getEmailType(), event.getToEmail(), e.getStatusCode(), e.getResponseBodyAsString());
+        } catch (Exception e) {
+            log.error("Failed to send email type={} to={}: {}", event.getEmailType(), event.getToEmail(), e.getMessage());
+        }
     }
 }

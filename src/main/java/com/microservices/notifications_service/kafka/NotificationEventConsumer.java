@@ -160,7 +160,11 @@ public class NotificationEventConsumer {
             return;
         }
         log.debug("Email notification event type={} to={}", event.getEmailType(), event.getToEmail());
-        brevoMailService.send(event);
+        try {
+            brevoMailService.send(event);
+        } catch (Exception e) {
+            log.error("Unhandled error sending email type={} to={}: {}", event.getEmailType(), event.getToEmail(), e.getMessage());
+        }
     }
 
     // -------------------------------------------------------------------------
