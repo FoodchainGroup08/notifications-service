@@ -1,12 +1,16 @@
 # Notifications Service
 
-Real-time notification microservice for the FoodChain platform. Pushes order events to connected clients via raw WebSocket (used by frontend hooks) and legacy STOMP/SockJS.
+Consumes Kafka order topics and pushes updates to browsers via **raw WebSockets** (primary path for the React app) and optional **STOMP/SockJS** for legacy clients.
 
-## Port
+## Port and routing
 
-`8087` — all REST endpoints are served under `/api` (e.g. `http://localhost:8087/api/notifications/ws-info`).
+| Item | Value |
+|------|--------|
+| **Port** | **8087** |
+| **REST context** | **`/api`** — e.g. `http://localhost:8087/api/...` |
+| **Via API Gateway** | **`http://localhost:8080`** — notifications REST under **`/api/v1/notifications/**`** when routed (see gateway README). WebSocket paths are listed below for direct vs gateway hosts. |
 
-WebSocket endpoints do NOT use the `/api` context-path prefix; they are registered directly on the servlet container.
+Raw WebSocket URLs **do not** use the `/api` servlet prefix — they are registered on the root path (for example **`ws://localhost:8087/ws/kitchen/{branchId}`** when hitting this service directly).
 
 ---
 
