@@ -11,27 +11,39 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 @Slf4j
 @RestController
-@RequestMapping("/notifications")
+@RequestMapping("/v1/notifications")
 @RequiredArgsConstructor
-@Tag(name = "Notifications", description = "Real-time customer notifications via WebSocket STOMP. " +
-        "Connect to /ws-notifications and subscribe to /topic/customer/{customerId} to receive order updates.")
+@Tag(name = "Notifications", description = "Real-time notifications via raw WebSocket and legacy STOMP/SockJS. " +
+        "Raw WS endpoints: /ws/kitchen/{branchId}, /ws/orders/{orderId}, /ws/manager/{branchId}. " +
+        "Legacy STOMP: connect to /ws-notifications and subscribe to /topic/customer/{customerId}.")
 public class NotificationController {
 
     private final SimpMessagingTemplate messagingTemplate;
 
     @GetMapping("/ws-info")
     @Operation(summary = "WebSocket connection info",
-            description = "Returns the WebSocket endpoint and topic patterns for client configuration.")
+            description = "Returns available WebSocket endpoints for both raw WS (frontend hooks) and legacy STOMP/SockJS.")
     @ApiResponse(responseCode = "200", description = "WebSocket info returned")
-    public ResponseEntity<Map<String, String>> wsInfo() {
-        return ResponseEntity.ok(Map.of(
-                "endpoint",      "/ws-notifications",
-                "customerTopic", "/topic/customer/{customerId}",
-                "protocol",      "STOMP over SockJS"
+    public ResponseEntity<Map<String, Object>> getWsInfo() {
+        Map<String, Object> info = new LinkedHashMap<>();
+        info.put("kitchenQueue",   "ws://[host]/ws/kitchen/{branchId}");
+        info.put("orderTracker",   "ws://[host]/ws/orders/{orderId}");
+        info.put("managerOrders",  "ws://[host]/ws/manager/{branchId}");
+        info.put("stompLegacy",    "ws://[host]/ws-notifications (STOMP/SockJS)");
+        info.put("messagePayload", Map.of(
+                "orderId",    "string",
+                "branchId",   "string",
+                "customerId", "string",
+                "oldStatus",  "string",
+                "newStatus",  "string",
+                "updatedBy",  "string",
+                "timestamp",  "ISO-8601 string"
         ));
+        return ResponseEntity.ok(info);
     }
 }

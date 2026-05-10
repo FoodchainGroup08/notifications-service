@@ -67,4 +67,17 @@ public class NotificationDtos {
         private String status;
         private LocalDateTime timestamp;
     }
+
+    /**
+     * Published by user-service to topic {@code notification.email.send}; HTML is rendered there, Brevo sends here.
+     */
+    @Data @NoArgsConstructor @AllArgsConstructor @Builder
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class EmailSendEvent {
+        private String toEmail;
+        private String toName;
+        private String subject;
+        private String htmlContent;
+        private String emailType;
+    }
 }

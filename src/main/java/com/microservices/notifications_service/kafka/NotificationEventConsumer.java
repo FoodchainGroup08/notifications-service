@@ -1,22 +1,50 @@
 package com.microservices.notifications_service.kafka;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microservices.notifications_service.dto.NotificationDtos;
-import lombok.RequiredArgsConstructor;
+import com.microservices.notifications_service.email.BrevoMailService;
+import com.microservices.notifications_service.websocket.RawWebSocketHandler;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class NotificationEventConsumer {
 
     private final SimpMessagingTemplate messagingTemplate;
     private final ObjectMapper objectMapper;
+    private final BrevoMailService brevoMailService;
+
+    @Autowired
+    @Qualifier("kitchenWebSocketHandler")
+    private RawWebSocketHandler kitchenWebSocketHandler;
+
+    @Autowired
+    @Qualifier("orderWebSocketHandler")
+    private RawWebSocketHandler orderWebSocketHandler;
+
+    @Autowired
+    @Qualifier("managerWebSocketHandler")
+    private RawWebSocketHandler managerWebSocketHandler;
+
+    @Autowired
+    public NotificationEventConsumer(SimpMessagingTemplate messagingTemplate,
+                                     ObjectMapper objectMapper,
+                                     BrevoMailService brevoMailService) {
+        this.messagingTemplate = messagingTemplate;
+        this.objectMapper = objectMapper;
+        this.brevoMailService = brevoMailService;
+    }
 
     @KafkaListener(topics = "order.received", groupId = "notifications-service-group")
     public void handleOrderReceived(String message) {
@@ -26,6 +54,7 @@ public class NotificationEventConsumer {
 
             log.info("Notification: order received orderId={} customerId={}", event.getOrderId(), event.getCustomerId());
 
+            // STOMP push to customer
             NotificationDtos.CustomerNotification notification = NotificationDtos.CustomerNotification.builder()
                     .type("ORDER_RECEIVED")
                     .orderId(event.getOrderId())
@@ -36,6 +65,18 @@ public class NotificationEventConsumer {
                     .build();
 
             pushToCustomer(event.getCustomerId(), notification);
+
+            // Raw WebSocket broadcast — kitchen queue and manager dashboard
+            Map<String, Object> wsPayload = buildWsPayload(
+                    event.getOrderId(),
+                    event.getBranchId(),
+                    event.getCustomerId(),
+                    null,
+                    event.getStatus(),
+                    null
+            );
+            broadcastToRawWs(event.getBranchId(), null, wsPayload, true, false, true);
+
         } catch (Exception e) {
             log.error("Failed to process order.received event: {}", e.getMessage());
         }
@@ -50,6 +91,7 @@ public class NotificationEventConsumer {
             log.info("Notification: status update orderId={} {} -> {}",
                     event.getOrderId(), event.getPreviousStatus(), event.getNewStatus());
 
+            // STOMP push to customer
             NotificationDtos.CustomerNotification notification = NotificationDtos.CustomerNotification.builder()
                     .type("STATUS_UPDATE")
                     .orderId(event.getOrderId())
@@ -60,6 +102,18 @@ public class NotificationEventConsumer {
                     .build();
 
             pushToCustomer(event.getCustomerId(), notification);
+
+            // Raw WebSocket broadcast — kitchen, order tracker, and manager dashboard
+            Map<String, Object> wsPayload = buildWsPayload(
+                    event.getOrderId(),
+                    event.getBranchId(),
+                    event.getCustomerId(),
+                    event.getPreviousStatus(),
+                    event.getNewStatus(),
+                    event.getUpdatedBy()
+            );
+            broadcastToRawWs(event.getBranchId(), event.getOrderId(), wsPayload, true, true, true);
+
         } catch (Exception e) {
             log.error("Failed to process order.status.updated event: {}", e.getMessage());
         }
@@ -79,6 +133,7 @@ public class NotificationEventConsumer {
                     ? "Your order is ready for pickup at the counter."
                     : "Your order is ready and being prepared for delivery.";
 
+            // STOMP push to customer
             NotificationDtos.CustomerNotification notification = NotificationDtos.CustomerNotification.builder()
                     .type("ORDER_READY")
                     .orderId(event.getOrderId())
@@ -89,15 +144,81 @@ public class NotificationEventConsumer {
                     .build();
 
             pushToCustomer(event.getCustomerId(), notification);
+
         } catch (Exception e) {
             log.error("Failed to process order.ready event: {}", e.getMessage());
         }
     }
 
+    @KafkaListener(topics = "notification.email.send", groupId = "notifications-service-group")
+    public void handleEmailSend(String message) {
+        NotificationDtos.EmailSendEvent event;
+        try {
+            event = objectMapper.readValue(message, NotificationDtos.EmailSendEvent.class);
+        } catch (JsonProcessingException e) {
+            log.error("Invalid notification.email.send JSON: {}", e.getOriginalMessage());
+            return;
+        }
+        log.debug("Email notification event type={} to={}", event.getEmailType(), event.getToEmail());
+        brevoMailService.send(event);
+    }
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+
     private void pushToCustomer(String customerId, NotificationDtos.CustomerNotification notification) {
         if (customerId == null) return;
         messagingTemplate.convertAndSend("/topic/customer/" + customerId, notification);
         log.debug("Pushed {} to /topic/customer/{}", notification.getType(), customerId);
+    }
+
+    /**
+     * Build the standard raw-WebSocket JSON payload used by frontend hooks.
+     */
+    private Map<String, Object> buildWsPayload(String orderId, String branchId, String customerId,
+                                                String oldStatus, String newStatus, String updatedBy) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("orderId",    orderId);
+        payload.put("branchId",   branchId);
+        payload.put("customerId", customerId);
+        payload.put("oldStatus",  oldStatus);
+        payload.put("newStatus",  newStatus);
+        payload.put("updatedBy",  updatedBy);
+        payload.put("timestamp",  Instant.now().toString());
+        return payload;
+    }
+
+    /**
+     * Serialize the payload and broadcast to whichever raw-WS handlers are requested.
+     *
+     * @param branchId        used as key for kitchen and manager handlers
+     * @param orderId         used as key for the order handler
+     * @param payload         the map to serialize to JSON
+     * @param toKitchen       whether to broadcast to the kitchen handler
+     * @param toOrder         whether to broadcast to the order-tracker handler
+     * @param toManager       whether to broadcast to the manager handler
+     */
+    private void broadcastToRawWs(String branchId, String orderId, Map<String, Object> payload,
+                                   boolean toKitchen, boolean toOrder, boolean toManager) {
+        try {
+            String json = objectMapper.writeValueAsString(payload);
+
+            if (toKitchen && branchId != null) {
+                kitchenWebSocketHandler.broadcast(branchId, json);
+                log.debug("[kitchen] Broadcasted WS event for branchId={}", branchId);
+            }
+            if (toOrder && orderId != null) {
+                orderWebSocketHandler.broadcast(orderId, json);
+                log.debug("[order] Broadcasted WS event for orderId={}", orderId);
+            }
+            if (toManager && branchId != null) {
+                managerWebSocketHandler.broadcast(branchId, json);
+                log.debug("[manager] Broadcasted WS event for branchId={}", branchId);
+            }
+        } catch (JsonProcessingException e) {
+            log.warn("Failed to serialize WS payload: {}", e.getMessage());
+        }
     }
 
     private String resolveTitle(String status) {
