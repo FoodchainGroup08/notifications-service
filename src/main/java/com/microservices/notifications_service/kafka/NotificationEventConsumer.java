@@ -3,7 +3,7 @@ package com.microservices.notifications_service.kafka;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microservices.notifications_service.dto.NotificationDtos;
-import com.microservices.notifications_service.email.BrevoMailService;
+import com.microservices.notifications_service.email.SmtpMailService;
 import com.microservices.notifications_service.websocket.RawWebSocketHandler;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,7 +23,7 @@ public class NotificationEventConsumer {
 
     private final SimpMessagingTemplate messagingTemplate;
     private final ObjectMapper objectMapper;
-    private final BrevoMailService brevoMailService;
+    private final SmtpMailService smtpMailService;
 
     @Autowired
     @Qualifier("kitchenWebSocketHandler")
@@ -40,10 +40,10 @@ public class NotificationEventConsumer {
     @Autowired
     public NotificationEventConsumer(SimpMessagingTemplate messagingTemplate,
                                      ObjectMapper objectMapper,
-                                     BrevoMailService brevoMailService) {
+                                     SmtpMailService smtpMailService) {
         this.messagingTemplate = messagingTemplate;
         this.objectMapper = objectMapper;
-        this.brevoMailService = brevoMailService;
+        this.smtpMailService = smtpMailService;
     }
 
     @KafkaListener(topics = "order.received", groupId = "notifications-service-group")
@@ -87,21 +87,23 @@ public class NotificationEventConsumer {
         try {
             NotificationDtos.OrderStatusUpdatedEvent event =
                     objectMapper.readValue(message, NotificationDtos.OrderStatusUpdatedEvent.class);
+            String newStatus = coalesce(event.getNewStatus(), event.getStatus());
 
             log.info("Notification: status update orderId={} {} -> {}",
-                    event.getOrderId(), event.getPreviousStatus(), event.getNewStatus());
+                    event.getOrderId(), event.getPreviousStatus(), newStatus);
 
             // STOMP push to customer
             NotificationDtos.CustomerNotification notification = NotificationDtos.CustomerNotification.builder()
                     .type("STATUS_UPDATE")
                     .orderId(event.getOrderId())
-                    .title(resolveTitle(event.getNewStatus()))
-                    .message(resolveMessage(event.getNewStatus(), event.getNotes()))
-                    .status(event.getNewStatus())
+                    .title(resolveTitle(newStatus))
+                    .message(resolveMessage(newStatus, event.getNotes()))
+                    .status(newStatus)
                     .timestamp(LocalDateTime.now())
                     .build();
 
             pushToCustomer(event.getCustomerId(), notification);
+            sendStatusEmail(event, notification);
 
             // Raw WebSocket broadcast — kitchen, order tracker, and manager dashboard
             Map<String, Object> wsPayload = buildWsPayload(
@@ -109,7 +111,7 @@ public class NotificationEventConsumer {
                     event.getBranchId(),
                     event.getCustomerId(),
                     event.getPreviousStatus(),
-                    event.getNewStatus(),
+                    newStatus,
                     event.getUpdatedBy()
             );
             broadcastToRawWs(event.getBranchId(), event.getOrderId(), wsPayload, true, true, true);
@@ -160,7 +162,7 @@ public class NotificationEventConsumer {
             return;
         }
         log.debug("Email notification event type={} to={}", event.getEmailType(), event.getToEmail());
-        brevoMailService.send(event);
+        smtpMailService.send(event);
     }
 
     // -------------------------------------------------------------------------
@@ -222,7 +224,7 @@ public class NotificationEventConsumer {
     }
 
     private String resolveTitle(String status) {
-        return switch (status) {
+        return switch (normalizeStatus(status)) {
             case "CONFIRMED" -> "Order Confirmed";
             case "PREPARING" -> "Kitchen is Preparing Your Order";
             case "READY"     -> "Your Order is Ready!";
@@ -233,14 +235,69 @@ public class NotificationEventConsumer {
     }
 
     private String resolveMessage(String status, String notes) {
-        String base = switch (status) {
+        String normalizedStatus = normalizeStatus(status);
+        String base = switch (normalizedStatus) {
             case "CONFIRMED" -> "Your order has been confirmed and sent to the kitchen.";
             case "PREPARING" -> "The kitchen has started preparing your order.";
             case "READY"     -> "Your order is ready and on its way to you.";
             case "COMPLETED" -> "Your order has been completed. Thank you for dining with us!";
             case "CANCELLED" -> "Your order has been cancelled.";
-            default          -> "Your order status has been updated to " + status + ".";
+            default          -> "Your order status has been updated to " + normalizedStatus + ".";
         };
         return (notes != null && !notes.isBlank()) ? base + " Note: " + notes : base;
+    }
+
+    private void sendStatusEmail(NotificationDtos.OrderStatusUpdatedEvent event,
+                                 NotificationDtos.CustomerNotification notification) {
+        if (event.getCustomerEmail() == null || event.getCustomerEmail().isBlank()) {
+            log.warn("Skip status email for order {}: missing customerEmail", event.getOrderId());
+            return;
+        }
+
+        String html = """
+                <div style="font-family:Arial,sans-serif;line-height:1.5;color:#1f2933">
+                  <h2 style="margin:0 0 12px">FoodChain order update</h2>
+                  <p>Hello %s,</p>
+                  <p>%s</p>
+                  <p><strong>Order:</strong> %s<br><strong>Status:</strong> %s</p>
+                  <p style="margin-top:24px">Thank you for choosing FoodChain.</p>
+                </div>
+                """.formatted(
+                escapeHtml(coalesce(event.getCustomerName(), "there")),
+                escapeHtml(notification.getMessage()),
+                escapeHtml(event.getOrderId()),
+                escapeHtml(normalizeStatus(notification.getStatus()))
+        );
+
+        try {
+            smtpMailService.send(NotificationDtos.EmailSendEvent.builder()
+                    .toEmail(event.getCustomerEmail())
+                    .toName(event.getCustomerName())
+                    .subject(notification.getTitle())
+                    .htmlContent(html)
+                    .emailType("ORDER_STATUS_UPDATE")
+                    .build());
+        } catch (Exception e) {
+            log.error("Failed to send status email for order {} to {}: {}",
+                    event.getOrderId(), event.getCustomerEmail(), e.getMessage());
+        }
+    }
+
+    private String normalizeStatus(String status) {
+        return status == null || status.isBlank() ? "UNKNOWN" : status.toUpperCase();
+    }
+
+    private String coalesce(String first, String fallback) {
+        return first != null && !first.isBlank() ? first : fallback;
+    }
+
+    private String escapeHtml(String value) {
+        if (value == null) return "";
+        return value
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;")
+                .replace("'", "&#39;");
     }
 }

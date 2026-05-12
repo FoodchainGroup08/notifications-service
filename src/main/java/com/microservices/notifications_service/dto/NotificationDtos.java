@@ -17,6 +17,8 @@ public class NotificationDtos {
     public static class OrderReceivedEvent {
         private String orderId;
         private String customerId;
+        private String customerName;
+        private String customerEmail;
         private String branchId;
         private String status;
         private BigDecimal totalAmount;
@@ -31,7 +33,10 @@ public class NotificationDtos {
     public static class OrderStatusUpdatedEvent {
         private String orderId;
         private String customerId;
+        private String customerName;
+        private String customerEmail;
         private String branchId;
+        private String status;
         private String previousStatus;
         private String newStatus;
         private String updatedBy;
@@ -43,6 +48,8 @@ public class NotificationDtos {
     public static class OrderReadyEvent {
         private String orderId;
         private String customerId;
+        private String customerName;
+        private String customerEmail;
         private String branchId;
         private String orderType;
         private String tableNumber;
