@@ -87,4 +87,45 @@ public class NotificationDtos {
         private String htmlContent;
         private String emailType;
     }
+
+    /** Published by analytics-report-service when a report is generated. */
+    @Data @NoArgsConstructor @AllArgsConstructor @Builder
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class ReportGeneratedEvent {
+        private String reportId;
+        private String reportType;
+        private String branchId;
+        private String generatedBy;
+        private String startDate;
+        private String endDate;
+    }
+
+    /** REST API response for a single persisted notification. */
+    @Data @NoArgsConstructor @AllArgsConstructor @Builder
+    public static class NotificationResponse {
+        private Long id;
+        private String userId;
+        private String title;
+        private String message;
+        private String type;
+        private String channel;
+        private String relatedEntityType;
+        private String relatedEntityId;
+        private String status;
+        private Boolean isRead;
+        private Integer retryCount;
+        private String sentAt;
+        private String readAt;
+        private String createdAt;
+    }
+
+    /** Summary row for paginated notification lists. */
+    @Data @NoArgsConstructor @AllArgsConstructor @Builder
+    public static class NotificationSummary {
+        private Long id;
+        private String title;
+        private String type;
+        private Boolean isRead;
+        private String createdAt;
+    }
 }

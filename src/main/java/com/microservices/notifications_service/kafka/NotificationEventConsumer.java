@@ -3,7 +3,8 @@ package com.microservices.notifications_service.kafka;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microservices.notifications_service.dto.NotificationDtos;
-import com.microservices.notifications_service.email.SmtpMailService;
+import com.microservices.notifications_service.email.BrevoMailService;
+import com.microservices.notifications_service.service.NotificationService;
 import com.microservices.notifications_service.websocket.RawWebSocketHandler;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,7 +24,8 @@ public class NotificationEventConsumer {
 
     private final SimpMessagingTemplate messagingTemplate;
     private final ObjectMapper objectMapper;
-    private final SmtpMailService smtpMailService;
+    private final BrevoMailService brevoMailService;
+    private final NotificationService notificationService;
 
     @Autowired
     @Qualifier("kitchenWebSocketHandler")
@@ -40,45 +42,41 @@ public class NotificationEventConsumer {
     @Autowired
     public NotificationEventConsumer(SimpMessagingTemplate messagingTemplate,
                                      ObjectMapper objectMapper,
-                                     SmtpMailService smtpMailService) {
-        this.messagingTemplate = messagingTemplate;
-        this.objectMapper = objectMapper;
-        this.smtpMailService = smtpMailService;
+                                     BrevoMailService brevoMailService,
+                                     NotificationService notificationService) {
+        this.messagingTemplate     = messagingTemplate;
+        this.objectMapper          = objectMapper;
+        this.brevoMailService      = brevoMailService;
+        this.notificationService   = notificationService;
     }
+
+    // ── Kafka consumers ───────────────────────────────────────────────────────
 
     @KafkaListener(topics = "order.received", groupId = "notifications-service-group")
     public void handleOrderReceived(String message) {
         try {
             NotificationDtos.OrderReceivedEvent event =
                     objectMapper.readValue(message, NotificationDtos.OrderReceivedEvent.class);
-
             log.info("Notification: order received orderId={} customerId={}", event.getOrderId(), event.getCustomerId());
 
-            // STOMP push to customer
-            NotificationDtos.CustomerNotification notification = NotificationDtos.CustomerNotification.builder()
-                    .type("ORDER_RECEIVED")
-                    .orderId(event.getOrderId())
-                    .title("Order Received!")
-                    .message("Your order has been received and is being reviewed by the kitchen.")
-                    .status(event.getStatus())
-                    .timestamp(LocalDateTime.now())
-                    .build();
-
-            pushToCustomer(event.getCustomerId(), notification);
-
-            // Raw WebSocket broadcast — kitchen queue and manager dashboard
-            Map<String, Object> wsPayload = buildWsPayload(
-                    event.getOrderId(),
-                    event.getBranchId(),
+            // 1. Persist IN_APP notification (delivers immediately via STOMP inside service)
+            notificationService.persist(
                     event.getCustomerId(),
-                    null,
-                    event.getStatus(),
-                    null
-            );
+                    "Order Received!",
+                    "Your order has been received and is being reviewed by the kitchen.",
+                    "ORDER_RECEIVED", "IN_APP", "ORDER", event.getOrderId());
+
+            // 2. Email
+            sendOrderReceivedEmail(event);
+
+            // 3. Raw WebSocket broadcast for kitchen + manager dashboards
+            Map<String, Object> wsPayload = buildWsPayload(
+                    event.getOrderId(), event.getBranchId(), event.getCustomerId(),
+                    null, event.getStatus(), null);
             broadcastToRawWs(event.getBranchId(), null, wsPayload, true, false, true);
 
         } catch (Exception e) {
-            log.error("Failed to process order.received event: {}", e.getMessage());
+            log.error("Failed to process order.received event: {}", e.getMessage(), e);
         }
     }
 
@@ -88,36 +86,32 @@ public class NotificationEventConsumer {
             NotificationDtos.OrderStatusUpdatedEvent event =
                     objectMapper.readValue(message, NotificationDtos.OrderStatusUpdatedEvent.class);
             String newStatus = coalesce(event.getNewStatus(), event.getStatus());
-
             log.info("Notification: status update orderId={} {} -> {}",
                     event.getOrderId(), event.getPreviousStatus(), newStatus);
 
-            // STOMP push to customer
-            NotificationDtos.CustomerNotification notification = NotificationDtos.CustomerNotification.builder()
-                    .type("STATUS_UPDATE")
-                    .orderId(event.getOrderId())
-                    .title(resolveTitle(newStatus))
-                    .message(resolveMessage(newStatus, event.getNotes()))
-                    .status(newStatus)
-                    .timestamp(LocalDateTime.now())
-                    .build();
+            String title   = resolveTitle(newStatus);
+            String body    = resolveMessage(newStatus, event.getNotes());
 
-            pushToCustomer(event.getCustomerId(), notification);
-            sendStatusEmail(event, notification);
+            // 1. Persist IN_APP notification
+            notificationService.persist(
+                    event.getCustomerId(), title, body,
+                    "STATUS_UPDATE", "IN_APP", "ORDER", event.getOrderId());
 
-            // Raw WebSocket broadcast — kitchen, order tracker, and manager dashboard
+            // 2. Email
+            NotificationDtos.CustomerNotification notif = NotificationDtos.CustomerNotification.builder()
+                    .type("STATUS_UPDATE").orderId(event.getOrderId())
+                    .title(title).message(body).status(newStatus)
+                    .timestamp(LocalDateTime.now()).build();
+            sendStatusEmail(event, notif);
+
+            // 3. Raw WebSocket broadcast
             Map<String, Object> wsPayload = buildWsPayload(
-                    event.getOrderId(),
-                    event.getBranchId(),
-                    event.getCustomerId(),
-                    event.getPreviousStatus(),
-                    newStatus,
-                    event.getUpdatedBy()
-            );
+                    event.getOrderId(), event.getBranchId(), event.getCustomerId(),
+                    event.getPreviousStatus(), newStatus, event.getUpdatedBy());
             broadcastToRawWs(event.getBranchId(), event.getOrderId(), wsPayload, true, true, true);
 
         } catch (Exception e) {
-            log.error("Failed to process order.status.updated event: {}", e.getMessage());
+            log.error("Failed to process order.status.updated event: {}", e.getMessage(), e);
         }
     }
 
@@ -126,7 +120,6 @@ public class NotificationEventConsumer {
         try {
             NotificationDtos.OrderReadyEvent event =
                     objectMapper.readValue(message, NotificationDtos.OrderReadyEvent.class);
-
             log.info("Notification: order ready orderId={} type={}", event.getOrderId(), event.getOrderType());
 
             String body = "DINE_IN".equals(event.getOrderType())
@@ -135,20 +128,19 @@ public class NotificationEventConsumer {
                     ? "Your order is ready for pickup at the counter."
                     : "Your order is ready and being prepared for delivery.";
 
-            // STOMP push to customer
-            NotificationDtos.CustomerNotification notification = NotificationDtos.CustomerNotification.builder()
-                    .type("ORDER_READY")
-                    .orderId(event.getOrderId())
-                    .title("Your Order is Ready!")
-                    .message(body)
-                    .status("READY")
-                    .timestamp(LocalDateTime.now())
-                    .build();
+            // 1. Persist IN_APP notification
+            notificationService.persist(
+                    event.getCustomerId(),
+                    "Your Order is Ready!", body,
+                    "ORDER_READY", "IN_APP", "ORDER", event.getOrderId());
 
-            pushToCustomer(event.getCustomerId(), notification);
+            // 2. Email — send for order-ready as well
+            if (event.getCustomerEmail() != null && !event.getCustomerEmail().isBlank()) {
+                sendOrderReadyEmail(event, body);
+            }
 
         } catch (Exception e) {
-            log.error("Failed to process order.ready event: {}", e.getMessage());
+            log.error("Failed to process order.ready event: {}", e.getMessage(), e);
         }
     }
 
@@ -162,12 +154,32 @@ public class NotificationEventConsumer {
             return;
         }
         log.debug("Email notification event type={} to={}", event.getEmailType(), event.getToEmail());
-        smtpMailService.send(event);
+        brevoMailService.send(event);
     }
 
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
+    @KafkaListener(topics = "analytics.report.generated", groupId = "notifications-service-group")
+    public void handleReportGenerated(String message) {
+        try {
+            NotificationDtos.ReportGeneratedEvent event =
+                    objectMapper.readValue(message, NotificationDtos.ReportGeneratedEvent.class);
+            log.info("Notification: report generated reportId={} type={}", event.getReportId(), event.getReportType());
+
+            String title = "Report Generated";
+            String body  = String.format("Your %s report (%s to %s) is ready.",
+                    event.getReportType(), event.getStartDate(), event.getEndDate());
+
+            // Notify the user who requested it
+            if (event.getGeneratedBy() != null && !event.getGeneratedBy().isBlank()) {
+                notificationService.persist(
+                        event.getGeneratedBy(), title, body,
+                        "REPORT_GENERATED", "IN_APP", "REPORT", event.getReportId());
+            }
+        } catch (Exception e) {
+            log.error("Failed to process analytics.report.generated event: {}", e.getMessage(), e);
+        }
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
     private void pushToCustomer(String customerId, NotificationDtos.CustomerNotification notification) {
         if (customerId == null) return;
@@ -175,9 +187,6 @@ public class NotificationEventConsumer {
         log.debug("Pushed {} to /topic/customer/{}", notification.getType(), customerId);
     }
 
-    /**
-     * Build the standard raw-WebSocket JSON payload used by frontend hooks.
-     */
     private Map<String, Object> buildWsPayload(String orderId, String branchId, String customerId,
                                                 String oldStatus, String newStatus, String updatedBy) {
         Map<String, Object> payload = new LinkedHashMap<>();
@@ -191,33 +200,13 @@ public class NotificationEventConsumer {
         return payload;
     }
 
-    /**
-     * Serialize the payload and broadcast to whichever raw-WS handlers are requested.
-     *
-     * @param branchId        used as key for kitchen and manager handlers
-     * @param orderId         used as key for the order handler
-     * @param payload         the map to serialize to JSON
-     * @param toKitchen       whether to broadcast to the kitchen handler
-     * @param toOrder         whether to broadcast to the order-tracker handler
-     * @param toManager       whether to broadcast to the manager handler
-     */
     private void broadcastToRawWs(String branchId, String orderId, Map<String, Object> payload,
                                    boolean toKitchen, boolean toOrder, boolean toManager) {
         try {
             String json = objectMapper.writeValueAsString(payload);
-
-            if (toKitchen && branchId != null) {
-                kitchenWebSocketHandler.broadcast(branchId, json);
-                log.debug("[kitchen] Broadcasted WS event for branchId={}", branchId);
-            }
-            if (toOrder && orderId != null) {
-                orderWebSocketHandler.broadcast(orderId, json);
-                log.debug("[order] Broadcasted WS event for orderId={}", orderId);
-            }
-            if (toManager && branchId != null) {
-                managerWebSocketHandler.broadcast(branchId, json);
-                log.debug("[manager] Broadcasted WS event for branchId={}", branchId);
-            }
+            if (toKitchen && branchId != null)  kitchenWebSocketHandler.broadcast(branchId, json);
+            if (toOrder   && orderId  != null)  orderWebSocketHandler.broadcast(orderId, json);
+            if (toManager && branchId != null)  managerWebSocketHandler.broadcast(branchId, json);
         } catch (JsonProcessingException e) {
             log.warn("Failed to serialize WS payload: {}", e.getMessage());
         }
@@ -235,24 +224,67 @@ public class NotificationEventConsumer {
     }
 
     private String resolveMessage(String status, String notes) {
-        String normalizedStatus = normalizeStatus(status);
-        String base = switch (normalizedStatus) {
+        String base = switch (normalizeStatus(status)) {
             case "CONFIRMED" -> "Your order has been confirmed and sent to the kitchen.";
             case "PREPARING" -> "The kitchen has started preparing your order.";
             case "READY"     -> "Your order is ready and on its way to you.";
             case "COMPLETED" -> "Your order has been completed. Thank you for dining with us!";
             case "CANCELLED" -> "Your order has been cancelled.";
-            default          -> "Your order status has been updated to " + normalizedStatus + ".";
+            default          -> "Your order status has been updated to " + normalizeStatus(status) + ".";
         };
         return (notes != null && !notes.isBlank()) ? base + " Note: " + notes : base;
     }
 
-    private void sendStatusEmail(NotificationDtos.OrderStatusUpdatedEvent event,
-                                 NotificationDtos.CustomerNotification notification) {
+    private void sendOrderReceivedEmail(NotificationDtos.OrderReceivedEvent event) {
         if (event.getCustomerEmail() == null || event.getCustomerEmail().isBlank()) {
-            log.warn("Skip status email for order {}: missing customerEmail", event.getOrderId());
+            log.warn("Skip order-received email for order {}: missing customerEmail", event.getOrderId());
             return;
         }
+
+        StringBuilder itemRows = new StringBuilder();
+        if (event.getItems() != null) {
+            for (NotificationDtos.OrderItemEvent item : event.getItems()) {
+                itemRows.append(String.format(
+                        "<tr><td style=\"padding:6px 8px;border-bottom:1px solid #eee\">%s</td>"
+                        + "<td style=\"padding:6px 8px;border-bottom:1px solid #eee;text-align:center\">%d</td></tr>",
+                        escapeHtml(item.getMenuItemName()), item.getQuantity()));
+            }
+        }
+
+        String html = """
+                <div style="font-family:Arial,sans-serif;line-height:1.6;color:#1f2933;max-width:560px">
+                  <div style="background:#e85d04;padding:24px 32px;border-radius:8px 8px 0 0">
+                    <h1 style="color:#fff;margin:0;font-size:22px">FoodChain</h1>
+                  </div>
+                  <div style="background:#fff;padding:32px;border:1px solid #eee;border-top:none;border-radius:0 0 8px 8px">
+                    <h2 style="margin-top:0;color:#222">Order Received!</h2>
+                    <p>Hi %s,</p>
+                    <p>We've received your order and the kitchen will start on it shortly.</p>
+                    <table width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:16px 0">
+                      <thead>
+                        <tr style="background:#f9f9f9">
+                          <th style="padding:8px;text-align:left;border-bottom:2px solid #eee">Item</th>
+                          <th style="padding:8px;text-align:center;border-bottom:2px solid #eee">Qty</th>
+                        </tr>
+                      </thead>
+                      <tbody>%s</tbody>
+                    </table>
+                    <p><strong>Order ID:</strong> %s</p>
+                    <p style="margin-top:24px;color:#999;font-size:13px">Thank you for choosing FoodChain.</p>
+                  </div>
+                </div>
+                """.formatted(
+                escapeHtml(coalesce(event.getCustomerName(), "there")),
+                itemRows.toString(),
+                escapeHtml(event.getOrderId()));
+
+        sendEmailSafely(event.getCustomerEmail(), event.getCustomerName(),
+                "FoodChain — Order Received", html, "ORDER_RECEIVED");
+    }
+
+    private void sendStatusEmail(NotificationDtos.OrderStatusUpdatedEvent event,
+                                 NotificationDtos.CustomerNotification notification) {
+        if (event.getCustomerEmail() == null || event.getCustomerEmail().isBlank()) return;
 
         String html = """
                 <div style="font-family:Arial,sans-serif;line-height:1.5;color:#1f2933">
@@ -266,20 +298,40 @@ public class NotificationEventConsumer {
                 escapeHtml(coalesce(event.getCustomerName(), "there")),
                 escapeHtml(notification.getMessage()),
                 escapeHtml(event.getOrderId()),
-                escapeHtml(normalizeStatus(notification.getStatus()))
-        );
+                escapeHtml(normalizeStatus(notification.getStatus())));
 
+        sendEmailSafely(event.getCustomerEmail(), event.getCustomerName(),
+                notification.getTitle(), html, "ORDER_STATUS_UPDATE");
+    }
+
+    private void sendOrderReadyEmail(NotificationDtos.OrderReadyEvent event, String body) {
+        String html = """
+                <div style="font-family:Arial,sans-serif;line-height:1.5;color:#1f2933">
+                  <h2 style="margin:0 0 12px">FoodChain — Your Order is Ready!</h2>
+                  <p>Hi %s,</p>
+                  <p>%s</p>
+                  <p><strong>Order ID:</strong> %s</p>
+                  <p style="margin-top:24px">Thank you for choosing FoodChain.</p>
+                </div>
+                """.formatted(
+                escapeHtml(coalesce(event.getCustomerName(), "there")),
+                escapeHtml(body),
+                escapeHtml(event.getOrderId()));
+
+        sendEmailSafely(event.getCustomerEmail(), event.getCustomerName(),
+                "FoodChain — Your Order is Ready!", html, "ORDER_READY");
+    }
+
+    private void sendEmailSafely(String toEmail, String toName, String subject,
+                                  String html, String emailType) {
         try {
-            smtpMailService.send(NotificationDtos.EmailSendEvent.builder()
-                    .toEmail(event.getCustomerEmail())
-                    .toName(event.getCustomerName())
-                    .subject(notification.getTitle())
-                    .htmlContent(html)
-                    .emailType("ORDER_STATUS_UPDATE")
+            brevoMailService.send(NotificationDtos.EmailSendEvent.builder()
+                    .toEmail(toEmail).toName(toName)
+                    .subject(subject).htmlContent(html)
+                    .emailType(emailType)
                     .build());
         } catch (Exception e) {
-            log.error("Failed to send status email for order {} to {}: {}",
-                    event.getOrderId(), event.getCustomerEmail(), e.getMessage());
+            log.error("Failed to send {} email to {}: {}", emailType, toEmail, e.getMessage());
         }
     }
 
@@ -293,11 +345,7 @@ public class NotificationEventConsumer {
 
     private String escapeHtml(String value) {
         if (value == null) return "";
-        return value
-                .replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-                .replace("\"", "&quot;")
-                .replace("'", "&#39;");
+        return value.replace("&", "&amp;").replace("<", "&lt;")
+                .replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&#39;");
     }
 }
