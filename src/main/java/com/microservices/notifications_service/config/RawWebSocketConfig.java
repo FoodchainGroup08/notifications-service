@@ -3,12 +3,10 @@ package com.microservices.notifications_service.config;
 import com.microservices.notifications_service.websocket.RawWebSocketHandler;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.web.socket.config.annotation.EnableWebSocket;
 import org.springframework.web.socket.config.annotation.WebSocketConfigurer;
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry;
 
 @Configuration
-@EnableWebSocket
 public class RawWebSocketConfig implements WebSocketConfigurer {
 
     private final RawWebSocketHandler kitchenWebSocketHandler;
