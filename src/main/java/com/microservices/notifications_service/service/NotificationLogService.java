@@ -83,11 +83,10 @@ public class NotificationLogService {
         return repository.findByCustomerIdOrderBySentAtDesc(customerId, pageable);
     }
 
-    private void save(NotificationLog log) {
+    private void save(NotificationLog entry) {
         try {
-            repository.save(log);
+            repository.save(entry);
         } catch (Exception e) {
-            // Log persistence failure must never break the notification delivery
             log.error("Failed to persist notification log: {}", e.getMessage());
         }
     }
