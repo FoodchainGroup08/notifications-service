@@ -59,7 +59,7 @@ class NotificationServiceImplTest {
         assertThat(persisted.getIsRead()).isFalse();
 
         // Delivery attempted (STOMP push)
-        verify(messagingTemplate).convertAndSend(contains(USER_ID), any());
+        verify(messagingTemplate).convertAndSend(contains(USER_ID), any(Object.class));
 
         // Delivery attempt recorded
         verify(deliveryAttemptRepository).save(any(NotificationDeliveryAttempt.class));
@@ -215,7 +215,7 @@ class NotificationServiceImplTest {
         service.retryFailed();
 
         // STOMP push attempted
-        verify(messagingTemplate).convertAndSend(contains(USER_ID), any());
+        verify(messagingTemplate).convertAndSend(contains(USER_ID), any(Object.class));
         // Delivery attempt recorded
         verify(deliveryAttemptRepository).save(any(NotificationDeliveryAttempt.class));
     }
