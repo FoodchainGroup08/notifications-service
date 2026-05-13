@@ -87,4 +87,23 @@ public class NotificationDtos {
         private String htmlContent;
         private String emailType;
     }
+
+    /** REST response for user notification history — matches frontend AdminNotification interface. */
+    @Data @NoArgsConstructor @AllArgsConstructor @Builder
+    public static class NotificationHistoryResponse {
+        private Long id;
+        private String userId;
+        private String title;
+        private String message;
+        private String type;
+        private String channel;
+        private String relatedEntityType;
+        private String relatedEntityId;
+        private String status;
+        private Boolean isRead;
+        private Integer retryCount;
+        private String sentAt;
+        private String readAt;
+        private String createdAt;
+    }
 }

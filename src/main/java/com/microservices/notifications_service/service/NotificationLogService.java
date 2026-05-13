@@ -6,8 +6,12 @@ import com.microservices.notifications_service.repository.NotificationLogReposit
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
 
@@ -81,6 +85,66 @@ public class NotificationLogService {
 
     public Page<NotificationLog> findByCustomerId(String customerId, Pageable pageable) {
         return repository.findByCustomerIdOrderBySentAtDesc(customerId, pageable);
+    }
+
+    // ── User notification management ──────────────────────────────────────────
+
+    @Transactional(readOnly = true)
+    public Page<NotificationDtos.NotificationHistoryResponse> getHistory(String userId, int page, int size) {
+        Pageable pageable = PageRequest.of(page, size);
+        return repository.findByUserIdOrderBySentAtDesc(userId, pageable)
+                .map(this::toHistoryResponse);
+    }
+
+    @Transactional(readOnly = true)
+    public long getUnreadCount(String userId) {
+        return repository.countByCustomerIdAndIsRead(userId, false);
+    }
+
+    @Transactional
+    public NotificationDtos.NotificationHistoryResponse markRead(Long id, String userId) {
+        int updated = repository.markReadByIdAndUserId(id, userId);
+        if (updated == 0) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "Notification not found or does not belong to user");
+        }
+        NotificationLog log = repository.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Notification not found"));
+        return toHistoryResponse(log);
+    }
+
+    @Transactional
+    public int markAllRead(String userId) {
+        return repository.markAllReadByUserId(userId);
+    }
+
+    @Transactional
+    public void delete(Long id, String userId) {
+        NotificationLog entry = repository.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Notification not found"));
+        if (!userId.equals(entry.getCustomerId())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Cannot delete another user's notification");
+        }
+        repository.delete(entry);
+    }
+
+    public NotificationDtos.NotificationHistoryResponse toHistoryResponse(NotificationLog n) {
+        return NotificationDtos.NotificationHistoryResponse.builder()
+                .id(n.getId())
+                .userId(n.getCustomerId())
+                .title(n.getTitle())
+                .message(n.getMessage())
+                .type(n.getNotificationType() != null ? n.getNotificationType().name() : null)
+                .channel(null)
+                .relatedEntityType(n.getOrderId() != null ? "ORDER" : null)
+                .relatedEntityId(n.getOrderId())
+                .status(n.getOrderStatus())
+                .isRead(n.getIsRead() != null && n.getIsRead())
+                .retryCount(0)
+                .sentAt(n.getSentAt() != null ? n.getSentAt().toString() : null)
+                .readAt(n.getReadAt() != null ? n.getReadAt().toString() : null)
+                .createdAt(n.getSentAt() != null ? n.getSentAt().toString() : null)
+                .build();
     }
 
     private void save(NotificationLog entry) {
