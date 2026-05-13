@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microservices.notifications_service.dto.NotificationDtos;
 import com.microservices.notifications_service.email.SmtpMailService;
+import com.microservices.notifications_service.service.NotificationLogService;
 import com.microservices.notifications_service.websocket.RawWebSocketHandler;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,6 +25,7 @@ public class NotificationEventConsumer {
     private final SimpMessagingTemplate messagingTemplate;
     private final ObjectMapper objectMapper;
     private final SmtpMailService smtpMailService;
+    private final NotificationLogService notificationLogService;
 
     @Autowired
     @Qualifier("kitchenWebSocketHandler")
@@ -40,10 +42,12 @@ public class NotificationEventConsumer {
     @Autowired
     public NotificationEventConsumer(SimpMessagingTemplate messagingTemplate,
                                      ObjectMapper objectMapper,
-                                     SmtpMailService smtpMailService) {
+                                     SmtpMailService smtpMailService,
+                                     NotificationLogService notificationLogService) {
         this.messagingTemplate = messagingTemplate;
         this.objectMapper = objectMapper;
         this.smtpMailService = smtpMailService;
+        this.notificationLogService = notificationLogService;
     }
 
     @KafkaListener(topics = "order.received", groupId = "notifications-service-group")
@@ -65,6 +69,7 @@ public class NotificationEventConsumer {
                     .build();
 
             pushToCustomer(event.getCustomerId(), notification);
+            notificationLogService.logOrderReceived(event, notification);
 
             // Raw WebSocket broadcast — kitchen queue and manager dashboard
             Map<String, Object> wsPayload = buildWsPayload(
@@ -104,6 +109,7 @@ public class NotificationEventConsumer {
 
             pushToCustomer(event.getCustomerId(), notification);
             sendStatusEmail(event, notification);
+            notificationLogService.logStatusUpdate(event, notification);
 
             // Raw WebSocket broadcast — kitchen, order tracker, and manager dashboard
             Map<String, Object> wsPayload = buildWsPayload(
@@ -146,6 +152,7 @@ public class NotificationEventConsumer {
                     .build();
 
             pushToCustomer(event.getCustomerId(), notification);
+            notificationLogService.logOrderReady(event, notification);
 
         } catch (Exception e) {
             log.error("Failed to process order.ready event: {}", e.getMessage());
@@ -163,6 +170,7 @@ public class NotificationEventConsumer {
         }
         log.debug("Email notification event type={} to={}", event.getEmailType(), event.getToEmail());
         smtpMailService.send(event);
+        notificationLogService.logEmail(event);
     }
 
     // -------------------------------------------------------------------------

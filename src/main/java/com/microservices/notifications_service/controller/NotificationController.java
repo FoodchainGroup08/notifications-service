@@ -1,15 +1,17 @@
 package com.microservices.notifications_service.controller;
 
+import com.microservices.notifications_service.entity.NotificationLog;
+import com.microservices.notifications_service.service.NotificationLogService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -24,6 +26,7 @@ import java.util.Map;
 public class NotificationController {
 
     private final SimpMessagingTemplate messagingTemplate;
+    private final NotificationLogService notificationLogService;
 
     @GetMapping("/ws-info")
     @Operation(summary = "WebSocket connection info",
@@ -45,5 +48,34 @@ public class NotificationController {
                 "timestamp",  "ISO-8601 string"
         ));
         return ResponseEntity.ok(info);
+    }
+
+    @GetMapping("/logs")
+    @Operation(summary = "Get all notification logs", description = "Returns a paginated list of all sent notifications.")
+    @ApiResponse(responseCode = "200", description = "Logs returned")
+    public ResponseEntity<Page<NotificationLog>> getLogs(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return ResponseEntity.ok(notificationLogService.findAll(PageRequest.of(page, size)));
+    }
+
+    @GetMapping("/logs/order/{orderId}")
+    @Operation(summary = "Get notification logs by order", description = "Returns all notifications sent for a specific order.")
+    @ApiResponse(responseCode = "200", description = "Logs returned")
+    public ResponseEntity<Page<NotificationLog>> getLogsByOrder(
+            @PathVariable String orderId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return ResponseEntity.ok(notificationLogService.findByOrderId(orderId, PageRequest.of(page, size)));
+    }
+
+    @GetMapping("/logs/customer/{customerId}")
+    @Operation(summary = "Get notification logs by customer", description = "Returns all notifications sent to a specific customer.")
+    @ApiResponse(responseCode = "200", description = "Logs returned")
+    public ResponseEntity<Page<NotificationLog>> getLogsByCustomer(
+            @PathVariable String customerId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return ResponseEntity.ok(notificationLogService.findByCustomerId(customerId, PageRequest.of(page, size)));
     }
 }
