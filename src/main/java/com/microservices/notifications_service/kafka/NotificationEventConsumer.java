@@ -233,24 +233,28 @@ public class NotificationEventConsumer {
 
     private String resolveTitle(String status) {
         return switch (normalizeStatus(status)) {
-            case "CONFIRMED" -> "Order Confirmed";
-            case "PREPARING" -> "Kitchen is Preparing Your Order";
-            case "READY"     -> "Your Order is Ready!";
-            case "COMPLETED" -> "Order Completed — Enjoy!";
-            case "CANCELLED" -> "Order Cancelled";
-            default          -> "Order Update";
+            case "CONFIRMED"  -> "Order Confirmed";
+            case "PREPARING"  -> "Kitchen is Preparing Your Order";
+            case "READY"      -> "Your Order is Ready!";
+            case "SERVED"     -> "Order Served — Enjoy Your Meal!";
+            case "PICKED_UP"  -> "Order Picked Up — Enjoy!";
+            case "COMPLETED"  -> "Order Completed — Enjoy!";
+            case "CANCELLED"  -> "Order Cancelled";
+            default           -> "Order Update";
         };
     }
 
     private String resolveMessage(String status, String notes) {
         String normalizedStatus = normalizeStatus(status);
         String base = switch (normalizedStatus) {
-            case "CONFIRMED" -> "Your order has been confirmed and sent to the kitchen.";
-            case "PREPARING" -> "The kitchen has started preparing your order.";
-            case "READY"     -> "Your order is ready and on its way to you.";
-            case "COMPLETED" -> "Your order has been completed. Thank you for dining with us!";
-            case "CANCELLED" -> "Your order has been cancelled.";
-            default          -> "Your order status has been updated to " + normalizedStatus + ".";
+            case "CONFIRMED"  -> "Your order has been confirmed and sent to the kitchen.";
+            case "PREPARING"  -> "The kitchen has started preparing your order.";
+            case "READY"      -> "Your order is ready and on its way to you.";
+            case "SERVED"     -> "Your order has been served. Thank you for dining with us!";
+            case "PICKED_UP"  -> "Your order has been picked up. Enjoy your meal!";
+            case "COMPLETED"  -> "Your order has been completed. Thank you for dining with us!";
+            case "CANCELLED"  -> "Your order has been cancelled.";
+            default           -> "Your order status has been updated to " + normalizedStatus + ".";
         };
         return (notes != null && !notes.isBlank()) ? base + " Note: " + notes : base;
     }

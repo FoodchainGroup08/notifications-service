@@ -13,39 +13,42 @@ import org.springframework.stereotype.Service;
 public class SmtpMailService {
 
     private final JavaMailSender mailSender;
+    private final BrevoMailService brevoMailService;
 
     @Value("${spring.mail.username:}")
     private String defaultFrom;
 
-    public SmtpMailService(JavaMailSender mailSender) {
+    public SmtpMailService(JavaMailSender mailSender, BrevoMailService brevoMailService) {
         this.mailSender = mailSender;
+        this.brevoMailService = brevoMailService;
     }
 
     public void send(NotificationDtos.EmailSendEvent event) {
         if (event.getToEmail() == null || event.getToEmail().isBlank()) {
-            log.warn("Skip SMTP email send: missing recipient");
-            return;
-        }
-        if (defaultFrom == null || defaultFrom.isBlank()) {
-            log.warn("Skip SMTP email send: spring.mail.username is not configured");
+            log.warn("Skip email send: missing recipient");
             return;
         }
         if (event.getHtmlContent() == null || event.getHtmlContent().isBlank()) {
-            log.warn("Skip SMTP email send: empty htmlContent for {}", event.getToEmail());
+            log.warn("Skip email send: empty htmlContent for {}", event.getToEmail());
             return;
         }
 
-        try {
-            MimeMessage message = mailSender.createMimeMessage();
-            MimeMessageHelper helper = new MimeMessageHelper(message, "UTF-8");
-            helper.setFrom(defaultFrom, "FoodChain");
-            helper.setTo(event.getToEmail());
-            helper.setSubject(event.getSubject() != null ? event.getSubject() : "FoodChain");
-            helper.setText(event.getHtmlContent(), true);
-            mailSender.send(message);
-            log.info("SMTP email sent type={} to={}", event.getEmailType(), event.getToEmail());
-        } catch (Exception e) {
-            throw new IllegalStateException("SMTP email send failed", e);
+        if (defaultFrom != null && !defaultFrom.isBlank()) {
+            try {
+                MimeMessage message = mailSender.createMimeMessage();
+                MimeMessageHelper helper = new MimeMessageHelper(message, "UTF-8");
+                helper.setFrom(defaultFrom, "FoodChain");
+                helper.setTo(event.getToEmail());
+                helper.setSubject(event.getSubject() != null ? event.getSubject() : "FoodChain");
+                helper.setText(event.getHtmlContent(), true);
+                mailSender.send(message);
+                log.info("SMTP email sent type={} to={}", event.getEmailType(), event.getToEmail());
+                return;
+            } catch (Exception e) {
+                log.warn("SMTP failed for {} ({}), trying Brevo fallback...", event.getToEmail(), e.getMessage());
+            }
         }
+
+        brevoMailService.send(event);
     }
 }
