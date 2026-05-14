@@ -3,6 +3,7 @@ package com.microservices.notifications_service.kafka;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microservices.notifications_service.dto.NotificationDtos;
+import com.microservices.notifications_service.email.EmailTemplates;
 import com.microservices.notifications_service.email.SmtpMailService;
 import com.microservices.notifications_service.service.NotificationLogService;
 import com.microservices.notifications_service.websocket.RawWebSocketHandler;
@@ -245,8 +246,12 @@ public class NotificationEventConsumer {
     }
 
     private String resolveMessage(String status, String notes) {
-        String normalizedStatus = normalizeStatus(status);
-        String base = switch (normalizedStatus) {
+        String base = resolveBaseMessage(normalizeStatus(status));
+        return (notes != null && !notes.isBlank()) ? base + " Note: " + notes : base;
+    }
+
+    private String resolveBaseMessage(String normalizedStatus) {
+        return switch (normalizedStatus) {
             case "CONFIRMED"  -> "Your order has been confirmed and sent to the kitchen.";
             case "PREPARING"  -> "The kitchen has started preparing your order.";
             case "READY"      -> "Your order is ready and on its way to you.";
@@ -256,7 +261,6 @@ public class NotificationEventConsumer {
             case "CANCELLED"  -> "Your order has been cancelled.";
             default           -> "Your order status has been updated to " + normalizedStatus + ".";
         };
-        return (notes != null && !notes.isBlank()) ? base + " Note: " + notes : base;
     }
 
     private void sendStatusEmail(NotificationDtos.OrderStatusUpdatedEvent event,
@@ -266,19 +270,13 @@ public class NotificationEventConsumer {
             return;
         }
 
-        String html = """
-                <div style="font-family:Arial,sans-serif;line-height:1.5;color:#1f2933">
-                  <h2 style="margin:0 0 12px">FoodChain order update</h2>
-                  <p>Hello %s,</p>
-                  <p>%s</p>
-                  <p><strong>Order:</strong> %s<br><strong>Status:</strong> %s</p>
-                  <p style="margin-top:24px">Thank you for choosing FoodChain.</p>
-                </div>
-                """.formatted(
-                escapeHtml(coalesce(event.getCustomerName(), "there")),
-                escapeHtml(notification.getMessage()),
-                escapeHtml(event.getOrderId()),
-                escapeHtml(normalizeStatus(notification.getStatus()))
+        String html = EmailTemplates.orderStatus(
+                coalesce(event.getCustomerName(), "there"),
+                event.getOrderId(),
+                normalizeStatus(notification.getStatus()),
+                notification.getTitle(),
+                resolveBaseMessage(normalizeStatus(notification.getStatus())),
+                event.getNotes()
         );
 
         try {
@@ -303,13 +301,4 @@ public class NotificationEventConsumer {
         return first != null && !first.isBlank() ? first : fallback;
     }
 
-    private String escapeHtml(String value) {
-        if (value == null) return "";
-        return value
-                .replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-                .replace("\"", "&quot;")
-                .replace("'", "&#39;");
-    }
 }
