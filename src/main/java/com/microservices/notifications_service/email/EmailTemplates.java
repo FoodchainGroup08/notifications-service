@@ -170,7 +170,7 @@ public final class EmailTemplates {
                 /* 5  greeting name    */ esc(customerName),
                 /* 6  body message     */ esc(baseMessage),
                 /* 7  notes block      */ notesBlock,
-                /* 8  order id         */ esc(orderId),
+                /* 8  order id         */ esc(shortId(orderId)),
                 /* 9  badge color      */ badgeColor,
                 /* 10 badge text       */ safeStatus,
                 /* 11 timestamp        */ timestamp
@@ -213,6 +213,13 @@ public final class EmailTemplates {
             case "CANCELLED"                                               -> "#dc2626";
             default                                                        -> "#6b7280";
         };
+    }
+
+    private static String shortId(String id) {
+        if (id == null || id.isBlank()) return "—";
+        int dash = id.indexOf('-');
+        String segment = dash > 0 ? id.substring(0, dash) : id.substring(0, Math.min(8, id.length()));
+        return "#" + segment.toUpperCase();
     }
 
     private static String esc(String s) {
