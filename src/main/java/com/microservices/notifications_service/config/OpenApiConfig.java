@@ -22,7 +22,10 @@ public class OpenApiConfig {
                                 "Consumes order events from Kafka and pushes updates to connected clients.")
                         .version("1.0.0"))
                 .servers(List.of(
-                        new Server().url("http://54.235.78.18:8080/api").description("Production (Live API Gateway)"),
+                        new Server().url("https://api.foodchain.live/api")
+                                .description("Production — Live (HTTPS)"),
+                        new Server()
+                                .url("http://54.235.78.18:8080/api").description("Production (Live API Gateway)"),
                         new Server().url("http://localhost:8080/api").description("API Gateway (local dev)"),
                         new Server().url("http://localhost:8087/api").description("Direct (local dev)")))
                 .components(new Components()
